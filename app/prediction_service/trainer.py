@@ -90,7 +90,7 @@ class Trainer():
                 factors: the list of factors for training the model
         '''
         try:
-            df = pd.read_csv(dataPath, nrows=700000)
+            df = pd.read_csv(dataPath)
             Y = df[['lifetime_minutes']]
             Y = self._log_transfer(['lifetime_minutes'], Y)
             X = df[factors]
