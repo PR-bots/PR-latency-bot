@@ -8,8 +8,8 @@ from app.db.operators.pull_request_operator import PullRequestOperator
 from app.utils.global_variables import GlobalVariable
 from app.prediction_service.predictor import Predictor
 
-LATENCY_ACCEPT = "✔️This pull request can be merged"
-LATENCY_REJECT = "✖️This pull request cannot be merged"
+LATENCY_TEMPLATE = "⏰This pull request needs %s minutes to finish."
+LATENCY_WRONG = "⏰This pull request can be finished soon."
 
 def return_pr_latency(prTrigger: PRTrigger) -> bool:
     try:
@@ -22,7 +22,9 @@ def return_pr_latency(prTrigger: PRTrigger) -> bool:
 
         # predict the result:
         latency = Predictor(trainer=GlobalVariable.trainer, type="submission").predict(pr=prTrigger.pr, installation=prTrigger.installation)
-        latency_comment = LATENCY_ACCEPT if latency else LATENCY_REJECT
+        if latency is None:
+            raise Exception("error with the prediction, None return")
+        latency_comment = LATENCY_TEMPLATE % (str(latency)) if latency is not None else LATENCY_WRONG
 
         token = getToken(prTrigger.installation)
         comment = PRComment(pr=prTrigger.pr, body=latency_comment)
@@ -50,10 +52,12 @@ async def return_pr_latency_schedular(prSchedulerTrigger:PRSchedulerTrigger) -> 
     try:
         # predict the result:
         latency = Predictor(trainer=GlobalVariable.trainer, type="process").predict(pr=prSchedulerTrigger.pr, installation=prSchedulerTrigger.installation)
-        latency_comment = LATENCY_ACCEPT if latency else LATENCY_REJECT
+        if latency is None:
+            raise Exception("error with the prediction, None return")
+        latency_comment = LATENCY_TEMPLATE % (str(latency)) if latency is not None else LATENCY_WRONG
 
         token = getToken(prSchedulerTrigger.installation)
-        comment = PRComment(pr=prSchedulerTrigger.pr, body=latency)
+        comment = PRComment(pr=prSchedulerTrigger.pr, body=latency_comment)
         headers = {'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json'}
         url = "https://api.github.com/repos/{owner}/{repo}/issues/{pull_request_number}/comments".format(owner=comment.pr.owner.login, repo=comment.pr.repo.name, pull_request_number=comment.pr.number)
         data = {"body": comment.body}
