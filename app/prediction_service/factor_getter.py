@@ -11,6 +11,8 @@ from app.models.installation import Installation
 from app.models.pull_request import PullRequest
 from app.models.user import User
 from app.models.repository import Repository
+from app.utils.global_variables import GlobalVariable
+from app.services.queries import query_app_id
 
 class FactorGetter():
     pr: PullRequest
@@ -22,54 +24,21 @@ class FactorGetter():
         self.installation = installation
         self.token = getToken(self.installation)
 
-    def lifetime_minutes(self):
-        try:
-            if self.pr.created_at is None:
-                # /repos/{owner}/{repo}/pulls/{pull_number}
-                headers = {'Authorization': 'token ' + self.token, 'Accept': 'application/vnd.github.v3+json'}
-                url = "https://api.github.com/repos/{owner}/{repo}/pulls/{pull_request_number}".format(owner=self.pr.owner.login, repo=self.pr.repo.name, pull_request_number=self.pr.number)
-                response = requests.get(url, headers=headers)
-                if response.status_code != 200:
-                    raise Exception("error with func lifetime_minutes: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
-                self.pr.created_at = TimeOperator().convertTZTime2TimeStamp(response.json()["created_at"])
-            return int((datetime.datetime.utcnow() - self.pr.created_at).total_seconds() / 60.0)
-        except Exception as e:
-            print("error with func lifetime_minutes: %s" % (repr(e)))
-            print(traceback.format_exc())
-
-    def has_comments(self):
-        try:
-            # /repos/{owner}/{repo}/issues/{issue_number}/timeline
-            headers = {'Authorization': 'token ' + self.token, 'Accept': 'application/vnd.github.mockingbird-preview+json'}
-            url = "https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/timeline?per_page=100".format(owner=self.pr.owner.login, repo=self.pr.repo.name, issue_number=self.pr.number)
-            response = requests.get(url, headers=headers)
-            if response.status_code != 200:
-                raise Exception("error with func has_comments: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
-            events = response.json()["created_at"]
-            print("pause")
-        except Exception as e:
-            print("error with func has_comments: %s" % (repr(e)))
-            print(traceback.format_exc())
-
     def query_pr_infos(self):
         try:
             # use graphql and query all the information
             '''
-                1. lifetime_minutes: createdAt
+                1. lifetime_minutes: createdAt (this factor is need to judge whether the predicted result is shorter than the already had lifetime)
                 2. has_comments: issue comments: comments; pull request comment: reviews; commit comments: commits
                 3. core_member: collaborators
                 4. num_commits: commits-totalCount (need recrawl according to the totalCount)
-                5. files_added: files-nodes (need recrawl according to the totalCount)
-                6. prev_pullreqs: (depend on defaultBranchRef)
-                7. open_pr_num: pullRequests (states: [OPEN]) { totalCount }
-                8. account_creation_days: user-createdAt
-                9. first_pr: pullRequests(baseRefName: "main") { totalCount }
-                10. files_changed: changedFiles
-                11. project_age: Repository-createdAt
-                12. reopen_or_not: timeline-REOPENED_EVENT
-                13. stars: stargazerCount
-                14. description_length: bodyText
-                15. followers: followers
+                5. prev_pullreqs: (depend on defaultBranchRef)
+                6. open_pr_num: pullRequests (states: [OPEN]) { totalCount }
+                7. files_changed: changedFiles
+                8. reopen_or_not: timeline-REOPENED_EVENT
+                9. description_length: bodyText
+                10. followers: followers
+                11. num_code_comments: 
             '''
 
             # first query the author:login, repo:default branch, number of changed files, number of commits; and all the attributed that do not depend on these variables
@@ -79,7 +48,7 @@ class FactorGetter():
                         pullRequest(number: %s) {
                             createdAt
                             comments { totalCount }
-                            reviews (first:1, states: COMMENTED) { totalCount }
+                            reviews (states: COMMENTED) { totalCount }
                             commits { totalCount }
                             changedFiles
                             timelineItems (itemTypes: [REOPENED_EVENT]) { totalCount }
@@ -91,7 +60,6 @@ class FactorGetter():
                         }
                         pullRequests { totalCount }
                         createdAt
-                        stargazerCount
                     }
                 }
             """
@@ -107,14 +75,12 @@ class FactorGetter():
             author_login = content["data"]["repository"]["pullRequest"]["author"]["login"]
             # factors
             lifetime_minutes = int((datetime.datetime.utcnow() - TimeOperator().convertTZTime2TimeStamp(content["data"]["repository"]["pullRequest"]["createdAt"])).total_seconds() / 60)
-            has_issue_comments = 1 if content["data"]["repository"]["pullRequest"]["comments"]["totalCount"] > 0 else 0
-            has_pr_comments = 1 if content["data"]["repository"]["pullRequest"]["reviews"]["totalCount"] > 0 else 0
+            num_issue_comments = content["data"]["repository"]["pullRequest"]["comments"]["totalCount"]
+            num_pr_comments = content["data"]["repository"]["pullRequest"]["reviews"]["totalCount"]
             num_commits = content["data"]["repository"]["pullRequest"]["commits"]["totalCount"]
             all_pr_num = content["data"]["repository"]["pullRequests"]["totalCount"]
             files_changed = content["data"]["repository"]["pullRequest"]["changedFiles"]
-            project_age = int((datetime.datetime.utcnow() - TimeOperator().convertTZTime2TimeStamp(content["data"]["repository"]["createdAt"])).total_seconds() / 60 / 60 / 24 / 30)
             reopen_or_not = 1 if content["data"]["repository"]["pullRequest"]["timelineItems"]["totalCount"] > 0 else 0
-            stars = content["data"]["repository"]["stargazerCount"]
             description_length = WordCounter().count([content["data"]["repository"]["pullRequest"]["bodyText"], content["data"]["repository"]["pullRequest"]["title"]])
             
 
@@ -137,88 +103,17 @@ class FactorGetter():
                 raise Exception("error with func query_pr_infos: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
             content = response.json()
 
-            account_creation_days = int((datetime.datetime.utcnow() - TimeOperator().convertTZTime2TimeStamp(content["data"]["user"]["createdAt"])).total_seconds() / 60 / 60 / 24)
             core_member = 1 if content["data"]["repository"]["collaborators"] is not None and content["data"]["repository"]["collaborators"]["edges"][0]["permission"] != "READ" else 0
             followers = content["data"]["user"]["followers"]["totalCount"]
 
-            # third query has_commit_comments -> has comments
-            has_comments = None
-            if has_issue_comments == 0 and has_pr_comments == 0:
-                if num_commits <= 100:
-                    query = """
-                        query {
-                            repository(owner: "%s", name: "%s") {
-                                pullRequest(number: %s) {
-                                    commits (first:100) { nodes { commit { comments { totalCount } } } }
-                                }
-                            }
-                        }
-                    """
-                    values = {"query": query % (self.pr.owner.login, self.pr.repo.name, self.pr.number)}
-                    response = requests.post(url=url, headers = headers, json=values)
-                    response.encoding = 'utf-8'
-                    if response.status_code != 200:
-                        raise Exception("error with func query_pr_infos: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
-                    content = response.json()
-                    for commit in content["data"]["repository"]["pullRequest"]["commits"]["nodes"]:
-                        if commit["commit"]["comments"]["totalCount"] > 0:
-                            has_comments = 1
-                            break
-                else:
-                    page = 0
-                    endCursor = None
-                    while(True):
-                        page += 1
-                        if page == 1:
-                            query = """
-                                query {
-                                    repository(owner: "%s", name: "%s") {
-                                        pullRequest(number: %s) {
-                                            commits (first:100) { nodes { commit { comments { totalCount } } } pageInfo { endCursor hasNextPage } }
-                                        }
-                                    }
-                                }
-                            """
-                            values = {"query": query % (self.pr.owner.login, self.pr.repo.name, self.pr.number)}
-                        else:
-                            query = """
-                                query {
-                                    repository(owner: "%s", name: "%s") {
-                                        pullRequest(number: %s) {
-                                            commits (first:100, after:"%s") { nodes { commit { comments { totalCount } } } pageInfo { endCursor hasNextPage } }
-                                        }
-                                    }
-                                }
-                            """
-                            values = {"query": query % (self.pr.owner.login, self.pr.repo.name, self.pr.number, endCursor)}
-                        response = requests.post(url=url, headers = headers, json=values)
-                        response.encoding = 'utf-8'
-                        if response.status_code != 200:
-                            raise Exception("error with func query_pr_infos: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
-                        content = response.json()
-
-                        for commit in content["data"]["repository"]["pullRequest"]["commits"]["nodes"]:
-                            if commit["commit"]["comments"]["totalCount"] > 0:
-                                has_comments = 1
-                                break
-                        hasNextPage = content["data"]["repository"]["pullRequest"]["commits"]["pageInfo"]["hasNextPage"]
-                        endCursor = content["data"]["repository"]["pullRequest"]["commits"]["pageInfo"]["endCursor"]
-                        if has_comments is not None or hasNextPage == False:
-                            break
-
-                if has_comments is None:
-                    has_comments = 0
-            else:
-                has_comments = 1
-
-            # fourth query files_added
-            files_added = 0
-            if files_changed <= 100:
+            # third query has_commit_comments -> has comments / num_code_comments
+            num_commit_comments = 0 # record the number of commit comments
+            if num_commits <= 100:
                 query = """
                     query {
                         repository(owner: "%s", name: "%s") {
                             pullRequest(number: %s) {
-                                files (first: 100) { nodes { additions deletions } }
+                                commits (first:100) { nodes { commit { comments { totalCount } } } }
                             }
                         }
                     }
@@ -229,9 +124,8 @@ class FactorGetter():
                 if response.status_code != 200:
                     raise Exception("error with func query_pr_infos: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
                 content = response.json()
-                for file in content["data"]["repository"]["pullRequest"]["files"]["nodes"]:
-                    if file["additions"] > 0 and file["deletions"] == 0:
-                        files_added += 1
+                for commit in content["data"]["repository"]["pullRequest"]["commits"]["nodes"]:
+                    num_commit_comments += commit["commit"]["comments"]["totalCount"]
             else:
                 page = 0
                 endCursor = None
@@ -242,7 +136,7 @@ class FactorGetter():
                             query {
                                 repository(owner: "%s", name: "%s") {
                                     pullRequest(number: %s) {
-                                        files (first:100) { nodes { additions deletions } pageInfo { endCursor hasNextPage } }
+                                        commits (first:100) { nodes { commit { comments { totalCount } } } pageInfo { endCursor hasNextPage } }
                                     }
                                 }
                             }
@@ -253,7 +147,7 @@ class FactorGetter():
                             query {
                                 repository(owner: "%s", name: "%s") {
                                     pullRequest(number: %s) {
-                                        files (first:100, after:"%s") { nodes { additions deletions }  pageInfo { endCursor hasNextPage } }
+                                        commits (first:100, after:"%s") { nodes { commit { comments { totalCount } } } pageInfo { endCursor hasNextPage } }
                                     }
                                 }
                             }
@@ -265,14 +159,15 @@ class FactorGetter():
                         raise Exception("error with func query_pr_infos: code: %s, message: %s" % (response.status_code, json.loads(response.text)["message"]))
                     content = response.json()
 
-                    for file in content["data"]["repository"]["pullRequest"]["files"]["nodes"]:
-                        if file["additions"] > 0 and file["deletions"] == 0:
-                            files_added += 1
-                    hasNextPage = content["data"]["repository"]["pullRequest"]["files"]["pageInfo"]["hasNextPage"]
-                    endCursor = content["data"]["repository"]["pullRequest"]["files"]["pageInfo"]["endCursor"]
+                    for commit in content["data"]["repository"]["pullRequest"]["commits"]["nodes"]:
+                        num_commit_comments += commit["commit"]["comments"]["totalCount"]
+                    hasNextPage = content["data"]["repository"]["pullRequest"]["commits"]["pageInfo"]["hasNextPage"]
+                    endCursor = content["data"]["repository"]["pullRequest"]["commits"]["pageInfo"]["endCursor"]
                     if hasNextPage == False:
                         break
-            
+
+            has_comments = 1 if num_issue_comments + num_pr_comments + num_commit_comments > 0 else 0
+            num_code_comments = num_pr_comments + num_commit_comments
 
             # fifth query all the pull requests for: open_pr_num, prev_pullreqs, first_pr
             open_pr_num = 0
@@ -300,7 +195,6 @@ class FactorGetter():
                         prev_pullreqs += 1
                 open_pr_num = open_pr_num - 1 if open_pr_num > 0 else open_pr_num
                 prev_pullreqs = prev_pullreqs - 1 if prev_pullreqs > 0 else prev_pullreqs
-                first_pr = 0 if prev_pullreqs > 0 else 1
             else:
                 page = 0
                 endCursor = None
@@ -347,11 +241,10 @@ class FactorGetter():
                         break
                 open_pr_num = open_pr_num - 1 if open_pr_num > 0 else open_pr_num
                 prev_pullreqs = prev_pullreqs - 1 if prev_pullreqs > 0 else prev_pullreqs
-                first_pr = 0 if prev_pullreqs > 0 else 1
 
             # return results
             result = {
-                "lifetime_minutes": lifetime_minutes, "has_comments": has_comments, "core_member": core_member, "num_commits": num_commits, "files_added": files_added, "prev_pullreqs": prev_pullreqs, "open_pr_num": open_pr_num, "account_creation_days": account_creation_days, "first_pr": first_pr, "files_changed": files_changed, "project_age": project_age, "reopen_or_not": reopen_or_not, "stars": stars, "description_length": description_length, "followers": followers
+                "lifetime_minutes": lifetime_minutes, "has_comments": has_comments, "core_member": core_member, "num_commits": num_commits, "prev_pullreqs": prev_pullreqs, "open_pr_num": open_pr_num, "files_changed": files_changed, "reopen_or_not": reopen_or_not, "description_length": description_length, "followers": followers, "num_code_comments": num_code_comments
             }
 
             return result
@@ -361,9 +254,10 @@ class FactorGetter():
             print(traceback.format_exc())
 
 if __name__ == "__main__":
+    GlobalVariable.appId = query_app_id()
     factorGetter = FactorGetter(
-        pr=PullRequest(owner=User(login="zhangxunhui"), repo=Repository(name="bot-pullreq-decision"), number=5),
-        installation=Installation(id=18836058)
+        pr=PullRequest(owner=User(login="zhangxunhui"), repo=Repository(name="bot-pullreq-decision"), number=23),
+        installation=Installation(id=18992641)
     )
     result = factorGetter.query_pr_infos()
     print("finish")
