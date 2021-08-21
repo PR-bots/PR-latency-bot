@@ -1,0 +1,10 @@
+trainer:
+  mode: "old" # the mode of trainer, old or new/for now, only old mode is supported
+  dataset_url: "https://zenodo.org/record/4837135/files/new_pullreq.csv?download=1" # only need to set when the mode is old
+  dataset_name: "trainer_dataset.csv" # the dataset name you set after downloading
+  model_names:
+    submission: "app/prediction_service/trained_model_submission.sav"
+    process: "app/prediction_service/trained_model_process.sav"
+  factor_list:
+    submission: ["core_member", "num_commits_open", "files_added_open", "prev_pullreqs", "open_pr_num", "account_creation_days", "first_pr", "files_changed_open", "project_age", "stars", "description_length", "followers"]
+    process: ["lifetime_minutes", "has_comments", "core_member", "num_commits_close", "files_added_close", "prev_pullreqs", "open_pr_num", "account_creation_days", "first_pr", "files_changed_close", "project_age", "reopen_or_not", "stars", "description_length", "followers"]
