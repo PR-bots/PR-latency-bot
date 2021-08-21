@@ -16,6 +16,7 @@ poetry shell
 
 ### 2. migrate database
 - change the configuration of your mysql database in .env.yaml file ("MYSQL" part)
+- create a database with the name you defined in the configuration file
 - run the following commands to create tables in the target database
 ```
 alembic upgrade head
