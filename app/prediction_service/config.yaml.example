@@ -6,5 +6,6 @@ trainer:
     submission: "app/prediction_service/trained_model_submission.sav"
     process: "app/prediction_service/trained_model_process.sav"
   factor_list:
-    submission: ["core_member", "num_commits_open", "files_added_open", "prev_pullreqs", "open_pr_num", "account_creation_days", "first_pr", "files_changed_open", "project_age", "stars", "description_length", "followers"]
-    process: ["lifetime_minutes", "has_comments", "core_member", "num_commits_close", "files_added_close", "prev_pullreqs", "open_pr_num", "account_creation_days", "first_pr", "files_changed_close", "project_age", "reopen_or_not", "stars", "description_length", "followers"]
+    submission: ["description_length", "prev_pullreqs", "open_pr_num", "core_member", "followers", "files_changed_open", "num_commits_open"]
+    process: ["has_comments", "description_length", "num_code_comments", "num_commits_close", "open_pr_num", "core_member", "reopen_or_not", "prev_pullreqs"]
+    continuous: ["description_length", "prev_pullreqs", "open_pr_num", "followers", "files_changed_open", "num_commits_open", "num_code_comments", "num_commit_close"]
