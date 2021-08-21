@@ -1,3 +1,9 @@
+app/prediction_service/config.yaml
+*.csv
+*.sav
+.VSCodeCounter/
+.vscode/
+.env.yaml
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
